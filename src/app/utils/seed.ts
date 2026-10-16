@@ -56,7 +56,7 @@ export const seedSuperAdmin = async () => {
 	} catch (error) {
 		console.log("Error Seeding Super Admin : ", error);
 
-		await prisma.user.delete({
+		await prisma.user.deleteMany({
 			where: {
 				email: config.super_admin_email,
 			},
@@ -117,7 +117,7 @@ export const seedTesterAdmin = async () => {
 	} catch (error) {
 		console.log("Error Seeding Tester Admin : ", error);
 
-		await prisma.user.delete({
+		await prisma.user.deleteMany({
 			where: {
 				email: config.tester_admin_email,
 			},
@@ -182,7 +182,7 @@ export const seedTesterDoctor = async () => {
 	} catch (error) {
 		console.log("Error Seeding Tester Doctor : ", error);
 
-		await prisma.user.delete({
+		await prisma.user.deleteMany({
 			where: {
 				email: config.tester_doctor_email,
 			},
