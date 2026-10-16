@@ -58,13 +58,10 @@ export const auth = (...requiredRoles: Role[]) => {
 		const user = await prisma.user.findUnique({
 			where: {
 				id: userId,
-				email,
-				name,
-				role,
 			},
 		});
 
-		if (!user) {
+		if (!user || user.email !== email || user.role !== role) {
 			throw new AppError(httpStatus.UNAUTHORIZED, "User not found. Please log in again.");
 		}
 

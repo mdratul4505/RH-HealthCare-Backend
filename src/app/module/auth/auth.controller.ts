@@ -223,6 +223,28 @@ const logout = catchAsync(async (req: Request, res: Response) => {
   });
 });
 
+const changePassword = catchAsync(async (req: Request, res: Response) => {
+  const result = await AuthService.changePassword(req.user!, req.body);
+
+  sendResponse(res, {
+    statusCode: httpStatus.OK,
+    success: true,
+    message: result.message,
+    data: null,
+  });
+});
+
+const setPassword = catchAsync(async (req: Request, res: Response) => {
+  const result = await AuthService.setPassword(req.user!, req.body);
+
+  sendResponse(res, {
+    statusCode: httpStatus.OK,
+    success: true,
+    message: result.message,
+    data: null,
+  });
+});
+
 export const AuthController = {
   registerPatient,
   verifyPatientEmail,
@@ -233,4 +255,7 @@ export const AuthController = {
   forgotPassword,
   resetPassword,
   logout,
+  changePassword,
+  setPassword,
 };
+

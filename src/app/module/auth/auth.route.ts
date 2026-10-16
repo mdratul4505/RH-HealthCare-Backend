@@ -64,6 +64,18 @@ router.post(
   validateRequest(UserValidation.ResetPasswordZodSchema),
   AuthController.resetPassword,
 );
+router.post(
+  "/change-password",
+  auth(Role.ADMIN, Role.DOCTOR, Role.PATIENT, Role.SUPER_ADMIN),
+  validateRequest(UserValidation.ChangePasswordZodSchema),
+  AuthController.changePassword,
+);
+router.post(
+  "/set-password",
+  auth(Role.PATIENT),
+  validateRequest(UserValidation.SetPasswordZodSchema),
+  AuthController.setPassword,
+);
 router.post("/logout", AuthController.logout);
 
 export const AuthRoutes = router;

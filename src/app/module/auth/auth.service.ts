@@ -8,6 +8,7 @@ import type { JwtPayload, SignOptions } from "jsonwebtoken";
 import path from "path";
 import {
   AuthProvider,
+  DoctorVerificationStatus,
   Role,
   UserStatus,
 } from "../../../generated/prisma/enums";
@@ -19,12 +20,14 @@ import { redisClient } from "../../lib/redis";
 import { AppError } from "../../utils/AppError";
 import { jwtUtils } from "../../utils/jwt";
 import type {
+  IChangePasswordPayload,
   IForgotPasswordPayload,
   IGoogleLoginPayload,
   ILoginUserPayload,
   IRegisterPatientPayload,
   IRequestUser,
   IResetPasswordPayload,
+  ISetPasswordPayload,
   IVerifyEmailPayload,
 } from "./auth.interface";
 
@@ -242,16 +245,46 @@ const loginUser = async (payload: ILoginUserPayload) => {
     throw new AppError(httpStatus.FORBIDDEN, "User is deleted");
   }
 
+  if (!user.emailVerified) {
+    throw new AppError(
+      httpStatus.FORBIDDEN,
+      "Email is not verified. Please verify your email first.",
+    );
+  }
+
+  if (user.role === Role.DOCTOR) {
+    const doctor = await prisma.doctor.findUnique({
+      where: { userId: user.id },
+    });
+
+    if (
+      !doctor ||
+      doctor.verificationStatus !== DoctorVerificationStatus.APPROVED
+    ) {
+      throw new AppError(
+        httpStatus.FORBIDDEN,
+        "Your doctor application has not been approved yet. Only approved doctors can log in.",
+      );
+    }
+  }
+
   if (user.password === null && user.googleId !== null) {
     throw new AppError(
       httpStatus.BAD_REQUEST,
-      "User Already Has Account Registered With Google. Try To Login With Google.",
+      "User already has an account registered with Google. Please log in with Google or set a password.",
+    );
+  }
+
+  if (!user.password) {
+    throw new AppError(
+      httpStatus.BAD_REQUEST,
+      "No password is set for this account.",
     );
   }
 
   const isPasswordMatched = await bcrypt.compare(
     password,
-    user.password as string,
+    user.password,
   );
 
   if (!isPasswordMatched) {
@@ -390,88 +423,81 @@ const googleLogin = async (payload: IGoogleLoginPayload) => {
     );
   }
 
-  const ifPatientExistWithGoogleAuth = await prisma.user.findUnique({
-    where: {
-      email: googleIdTokenPayload.email,
-      role: Role.PATIENT,
-      googleId: googleIdTokenPayload.sub,
-    },
+  const email = googleIdTokenPayload.email.trim().toLowerCase();
+
+  const existingUser = await prisma.user.findUnique({
+    where: { email },
   });
 
-  let user = ifPatientExistWithGoogleAuth;
+  let user = existingUser;
 
-  if (!ifPatientExistWithGoogleAuth) {
-    const ifPatientExistWithCredentials = await prisma.user.findUnique({
-      where: {
-        email: googleIdTokenPayload.email,
+  if (existingUser) {
+    if (existingUser.role !== Role.PATIENT) {
+      throw new AppError(
+        httpStatus.FORBIDDEN,
+        "Google login is only available for patients. Doctors, Admins, and Super Admins must log in with email and password.",
+      );
+    }
+
+    if (existingUser.status === UserStatus.BLOCKED) {
+      throw new AppError(httpStatus.FORBIDDEN, "User Is Blocked");
+    }
+
+    if (
+      existingUser.isDeleted ||
+      existingUser.status === UserStatus.DELETED
+    ) {
+      throw new AppError(httpStatus.FORBIDDEN, "User Is Deleted");
+    }
+
+    if (!existingUser.emailVerified) {
+      throw new AppError(httpStatus.FORBIDDEN, "Email Not Verified");
+    }
+
+    if (!existingUser.googleId) {
+      user = await prisma.user.update({
+        where: { id: existingUser.id },
+        data: {
+          googleId: googleIdTokenPayload.sub,
+        },
+      });
+    }
+  } else {
+    // Brand new Google Patient Registration
+    user = await prisma.user.create({
+      data: {
+        name: googleIdTokenPayload.name,
+        email,
         role: Role.PATIENT,
-        authProvider: AuthProvider.CREDENTIAL,
+        googleId: googleIdTokenPayload.sub,
+        authProvider: AuthProvider.GOOGLE,
+        emailVerified: true,
+        patient: {
+          create: {
+            name: googleIdTokenPayload.name,
+            email,
+          },
+        },
       },
     });
 
-    if (ifPatientExistWithCredentials) {
-      if (!ifPatientExistWithCredentials.emailVerified) {
-        throw new AppError(httpStatus.FORBIDDEN, "Email Not Verified");
-      }
+    const tempatePath = path.join(
+      process.cwd(),
+      "src/app/templates/patient-welcome-email.ejs",
+    );
 
-      if (ifPatientExistWithCredentials.status === UserStatus.BLOCKED) {
-        throw new AppError(httpStatus.FORBIDDEN, "User Is Blocked");
-      }
+    const templateData = {
+      name: user.name,
+    };
 
-      if (
-        ifPatientExistWithCredentials.isDeleted ||
-        ifPatientExistWithCredentials.status === UserStatus.DELETED
-      ) {
-        throw new AppError(httpStatus.FORBIDDEN, "User Is Deleted");
-      }
+    const html = await ejs.renderFile(tempatePath, templateData);
 
-      user = await prisma.user.update({
-        where: {
-          id: ifPatientExistWithCredentials.id,
-        },
-
-        data: {
-          googleId: googleIdTokenPayload.sub,
-        },
-      });
-    } else {
-      // Google Register
-      user = await prisma.user.create({
-        data: {
-          name: googleIdTokenPayload.name,
-          email: googleIdTokenPayload.email,
-          role: Role.PATIENT,
-          googleId: googleIdTokenPayload.sub,
-          authProvider: AuthProvider.GOOGLE,
-          emailVerified: true,
-          patient: {
-            create: {
-              name: googleIdTokenPayload.name,
-              email: googleIdTokenPayload.email,
-            },
-          },
-        },
-      });
-      const tempatePath = path.join(
-        process.cwd(),
-        "src/app/templates/patient-welcome-email.ejs",
-      );
-
-      const templateData = {
-        name: user.name,
-      };
-
-      const html = await ejs.renderFile(tempatePath, templateData);
-
-      await transporter.sendMail({
-        from: config.email_sender,
-        to: user.email,
-        subject: "Welcome To PH Healthcare System",
-        // text : `Your OTP is ${otp}`
-        // html: `<h1>Your OTP is ${otp}</h1>`
-        html,
-      });
-    }
+    await transporter.sendMail({
+      from: config.email_sender,
+      to: user.email,
+      subject: "Welcome To PH Healthcare System",
+      html,
+    });
   }
 
   if (!user) {
@@ -657,6 +683,117 @@ const resetPassword = async (payload: IResetPasswordPayload) => {
   });
 };
 
+const changePassword = async (
+  currentUser: IRequestUser,
+  payload: IChangePasswordPayload,
+) => {
+  const user = await prisma.user.findUnique({
+    where: { id: currentUser.userId },
+  });
+
+  if (!user) {
+    throw new AppError(httpStatus.NOT_FOUND, "User Not Found");
+  }
+
+  if (user.status === UserStatus.BLOCKED) {
+    throw new AppError(httpStatus.FORBIDDEN, "User is blocked");
+  }
+
+  if (!user.password) {
+    throw new AppError(
+      httpStatus.BAD_REQUEST,
+      "You do not have a password set yet. Please use set-password instead.",
+    );
+  }
+
+  const isPasswordMatched = await bcrypt.compare(
+    payload.currentPassword,
+    user.password,
+  );
+
+  if (!isPasswordMatched) {
+    throw new AppError(
+      httpStatus.BAD_REQUEST,
+      "Current password does not match.",
+    );
+  }
+
+  const hashedPassword = await bcrypt.hash(
+    payload.newPassword,
+    Number(config.bcrypt_salt_rounds) || 8,
+  );
+
+  await prisma.user.update({
+    where: { id: user.id },
+    data: {
+      password: hashedPassword,
+      needPasswordChange: false,
+    },
+  });
+
+  const templatePath = path.join(
+    process.cwd(),
+    "src/app/templates/reset-password-success.ejs",
+  );
+
+  const html = await ejs.renderFile(templatePath, { name: user.name });
+
+  await transporter.sendMail({
+    from: config.email_sender,
+    to: user.email,
+    subject: "Password Changed - PH Healthcare System",
+    html,
+  });
+
+  return {
+    message: "Password changed successfully",
+  };
+};
+
+const setPassword = async (
+  currentUser: IRequestUser,
+  payload: ISetPasswordPayload,
+) => {
+  if (currentUser.role !== Role.PATIENT) {
+    throw new AppError(
+      httpStatus.FORBIDDEN,
+      "Set password feature is only available for patients.",
+    );
+  }
+
+  const user = await prisma.user.findUnique({
+    where: { id: currentUser.userId },
+  });
+
+  if (!user) {
+    throw new AppError(httpStatus.NOT_FOUND, "User Not Found");
+  }
+
+  if (user.password !== null && user.password !== "") {
+    throw new AppError(
+      httpStatus.BAD_REQUEST,
+      "Password is already set. Please use change password to update it.",
+    );
+  }
+
+  const hashedPassword = await bcrypt.hash(
+    payload.password,
+    Number(config.bcrypt_salt_rounds) || 8,
+  );
+
+  await prisma.user.update({
+    where: { id: user.id },
+    data: {
+      password: hashedPassword,
+    },
+  });
+
+  return {
+    message:
+      "Password set successfully. You can now log in with either Google or email/password.",
+  };
+};
+
 export const AuthService = {
   registerPatient,
   verifyPatientEmail,
@@ -666,4 +803,7 @@ export const AuthService = {
   googleLogin,
   forgotPassword,
   resetPassword,
+  changePassword,
+  setPassword,
 };
+
