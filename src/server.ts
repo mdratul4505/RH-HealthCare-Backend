@@ -39,4 +39,8 @@ const main = async () => {
 	}
 };
 
-main();
+export default app;
+
+if (!process.env.VERCEL) {
+	main();
+}

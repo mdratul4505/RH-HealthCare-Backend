@@ -61,6 +61,9 @@ export const redisClient = {
 	},
 
 	async get(key: string): Promise<string | null> {
+		if (!isConnected && !useFallback) {
+			await this.connect();
+		}
 		if (!useFallback) {
 			try {
 				return await rawRedisClient.get(key);
@@ -84,6 +87,9 @@ export const redisClient = {
 		value: string,
 		options?: { expiration?: { type: "EX" | "PX"; value: number } },
 	): Promise<string | null> {
+		if (!isConnected && !useFallback) {
+			await this.connect();
+		}
 		if (!useFallback) {
 			try {
 				if (options?.expiration) {
@@ -115,6 +121,9 @@ export const redisClient = {
 	},
 
 	async del(key: string | string[]): Promise<number> {
+		if (!isConnected && !useFallback) {
+			await this.connect();
+		}
 		if (!useFallback) {
 			try {
 				return await rawRedisClient.del(key);
@@ -135,6 +144,9 @@ export const redisClient = {
 	},
 
 	async ttl(key: string): Promise<number> {
+		if (!isConnected && !useFallback) {
+			await this.connect();
+		}
 		if (!useFallback) {
 			try {
 				return await rawRedisClient.ttl(key);
