@@ -392,9 +392,19 @@ const refreshToken = async (token: string) => {
 const googleLogin = async (payload: IGoogleLoginPayload) => {
   let googleIdTokenPayload: TokenPayload | null | undefined = null;
   try {
+    const allowedAudiences = Array.from(
+      new Set(
+        [
+          config.google_client_id,
+          "137918537073-o5p7ojshmfj46k3be9joqdfcafk89uvq.apps.googleusercontent.com",
+          "1595478545430933-o5gb34358hbsdqrgljhrkfesfkjew343rsim2tm9.apps.googleusercontent.com",
+        ].filter(Boolean) as string[],
+      ),
+    );
+
     const ticket = await googleClient.verifyIdToken({
       idToken: payload.idToken,
-      audience: config.google_client_id,
+      audience: allowedAudiences,
     });
 
     googleIdTokenPayload = ticket.getPayload();
@@ -416,14 +426,14 @@ const googleLogin = async (payload: IGoogleLoginPayload) => {
   if (!googleIdTokenPayload.email) {
     throw new AppError(httpStatus.BAD_REQUEST, "Google Email Not Found");
   }
-  if (!googleIdTokenPayload.name) {
-    throw new AppError(
-      httpStatus.BAD_REQUEST,
-      "Google Email User Name Not Found",
-    );
-  }
 
   const email = googleIdTokenPayload.email.trim().toLowerCase();
+  const userName =
+    googleIdTokenPayload.name ||
+    [googleIdTokenPayload.given_name, googleIdTokenPayload.family_name]
+      .filter(Boolean)
+      .join(" ") ||
+    email.split("@")[0];
 
   const existingUser = await prisma.user.findUnique({
     where: { email },
@@ -450,15 +460,34 @@ const googleLogin = async (payload: IGoogleLoginPayload) => {
       throw new AppError(httpStatus.FORBIDDEN, "User Is Deleted");
     }
 
-    if (!existingUser.emailVerified) {
-      throw new AppError(httpStatus.FORBIDDEN, "Email Not Verified");
-    }
+    const updateData: {
+      googleId?: string;
+      emailVerified?: boolean;
+    } = {};
 
     if (!existingUser.googleId) {
+      updateData.googleId = googleIdTokenPayload.sub;
+    }
+
+    if (!existingUser.emailVerified && googleIdTokenPayload.email_verified) {
+      updateData.emailVerified = true;
+    }
+
+    if (Object.keys(updateData).length > 0) {
       user = await prisma.user.update({
         where: { id: existingUser.id },
+        data: updateData,
+      });
+    }
+
+    const existingPatient = await prisma.patient.findUnique({
+      where: { email },
+    });
+    if (!existingPatient) {
+      await prisma.patient.create({
         data: {
-          googleId: googleIdTokenPayload.sub,
+          name: existingUser.name || userName,
+          email,
         },
       });
     }
@@ -466,7 +495,7 @@ const googleLogin = async (payload: IGoogleLoginPayload) => {
     // Brand new Google Patient Registration
     user = await prisma.user.create({
       data: {
-        name: googleIdTokenPayload.name,
+        name: userName,
         email,
         role: Role.PATIENT,
         googleId: googleIdTokenPayload.sub,
@@ -474,30 +503,37 @@ const googleLogin = async (payload: IGoogleLoginPayload) => {
         emailVerified: true,
         patient: {
           create: {
-            name: googleIdTokenPayload.name,
+            name: userName,
             email,
           },
         },
       },
     });
 
-    const tempatePath = path.join(
-      process.cwd(),
-      "src/app/templates/patient-welcome-email.ejs",
-    );
+    try {
+      const tempatePath = path.join(
+        process.cwd(),
+        "src/app/templates/patient-welcome-email.ejs",
+      );
 
-    const templateData = {
-      name: user.name,
-    };
+      const templateData = {
+        name: user.name,
+      };
 
-    const html = await ejs.renderFile(tempatePath, templateData);
+      const html = await ejs.renderFile(tempatePath, templateData);
 
-    await transporter.sendMail({
-      from: config.email_sender,
-      to: user.email,
-      subject: "Welcome To PH Healthcare System",
-      html,
-    });
+      await transporter.sendMail({
+        from: config.email_sender,
+        to: user.email,
+        subject: "Welcome To PH Healthcare System",
+        html,
+      });
+    } catch (emailError) {
+      console.error(
+        "Patient welcome email failed to send (non-fatal):",
+        emailError,
+      );
+    }
   }
 
   if (!user) {

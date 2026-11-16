@@ -22,9 +22,25 @@ import { UserRoutes } from "./app/module/user/user.route";
 
 const app: Application = express();
 
+const allowedOrigins = [
+	config.frontend_url,
+	"http://localhost:3000",
+	"http://localhost:3001",
+].filter(Boolean) as string[];
+
 app.use(
 	cors({
-		origin: config.frontend_url,
+		origin: (origin, callback) => {
+			if (!origin) return callback(null, true);
+			if (
+				allowedOrigins.includes(origin) ||
+				origin.includes("localhost") ||
+				origin.endsWith(".vercel.app")
+			) {
+				return callback(null, origin);
+			}
+			return callback(null, origin);
+		},
 		credentials: true,
 	}),
 );
