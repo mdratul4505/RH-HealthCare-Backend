@@ -84,28 +84,36 @@ const registerPatient = async (payload: IRegisterPatientPayload) => {
     },
   );
 
-  const tempatePath = path.join(
-    process.cwd(),
-    "src/app/templates/registration-user-otp.ejs",
-  );
+  try {
+    const tempatePath = path.join(
+      process.cwd(),
+      "src/app/templates/registration-user-otp.ejs",
+    );
 
-  const templateData = {
-    name,
-    email,
-    otp: otpValue,
-    expirationMinutes: expirationSeconds / 60,
-  };
+    const templateData = {
+      name,
+      email,
+      otp: otpValue,
+      expirationMinutes: expirationSeconds / 60,
+    };
 
-  const html = await ejs.renderFile(tempatePath, templateData);
+    const html = await ejs.renderFile(tempatePath, templateData);
 
-  await transporter.sendMail({
-    from: config.email_sender,
-    to: email,
-    subject: "Email Verification",
-    // text : `Your OTP is ${otp}`
-    // html: `<h1>Your OTP is ${otp}</h1>`
-    html,
-  });
+    await transporter.sendMail({
+      from: config.email_sender,
+      to: email,
+      subject: "Email Verification",
+      html,
+    });
+  } catch (emailError: any) {
+    console.error("Failed to send OTP verification email:", emailError);
+    if (config.node_env !== "development") {
+      throw new AppError(
+        httpStatus.INTERNAL_SERVER_ERROR,
+        "Failed to send verification email. Please check SMTP settings or try again.",
+      );
+    }
+  }
 };
 
 const verifyPatientEmail = async (payload: IVerifyEmailPayload) => {
@@ -174,25 +182,27 @@ const verifyPatientEmail = async (payload: IVerifyEmailPayload) => {
 
   await redisClient.del(patientRegistrationKey);
 
-  const tempatePath = path.join(
-    process.cwd(),
-    "src/app/templates/patient-welcome-email.ejs",
-  );
+  try {
+    const tempatePath = path.join(
+      process.cwd(),
+      "src/app/templates/patient-welcome-email.ejs",
+    );
 
-  const templateData = {
-    name: createdUser.name,
-  };
+    const templateData = {
+      name: createdUser.name,
+    };
 
-  const html = await ejs.renderFile(tempatePath, templateData);
+    const html = await ejs.renderFile(tempatePath, templateData);
 
-  await transporter.sendMail({
-    from: config.email_sender,
-    to: email,
-    subject: "Welcome To PH Healthcare System",
-    // text : `Your OTP is ${otp}`
-    // html: `<h1>Your OTP is ${otp}</h1>`
-    html,
-  });
+    await transporter.sendMail({
+      from: config.email_sender,
+      to: email,
+      subject: "Welcome To PH Healthcare System",
+      html,
+    });
+  } catch (emailError) {
+    console.error("Patient welcome email failed to send (non-fatal):", emailError);
+  }
 
   const { patient, ...user } = createdUser;
   const jwtPayload = {
@@ -488,6 +498,7 @@ const googleLogin = async (payload: IGoogleLoginPayload) => {
         data: {
           name: existingUser.name || userName,
           email,
+          userId: existingUser.id,
         },
       });
     }
